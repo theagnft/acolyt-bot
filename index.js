@@ -97,7 +97,7 @@ client.on("interactionCreate", async (interaction) => {
     const notes = fs.readFileSync(path.join(__dirname, "knowledge", "training-notes.md"), "utf8");
     const blocks = notes.split(/\n{2,}/).filter(Boolean);
     const vectorCount = JSON.parse(fs.readFileSync(path.join(__dirname, "signal-embeds.json"), "utf8")).length;
-    const preview = blocks.slice(-3).map(b => `• ${b.split("\n")[1]?.slice(0, 80)}...`).join("\n");
+    const preview = blocks.slice(-3).map(b => `• ${b.split("\n")[1]?.slice(0, 80) || "(empty)"}...`).join("\n");
 
     await interaction.reply({
       ephemeral: true,
@@ -110,33 +110,43 @@ client.on("interactionCreate", async (interaction) => {
     const userInput = interaction.options.getString("mensagem");
     const userId = interaction.user.id;
 
-    await interaction.deferReply({ ephemeral: true });
-    await interaction.channel.sendTyping();
-
-    const context = await getRelevantContext(userInput);
-    const previousMessages = conversations.get(userId) || [];
-
-    const messages = [
-      systemMessage,
-      { role: "system", content: `Relevant info from docs:\n${context}` },
-      ...previousMessages,
-      { role: "user", content: userInput }
-    ];
-
     try {
+      await interaction.deferReply({ ephemeral: true });
+      await interaction.channel.sendTyping();
+
+      const context = await getRelevantContext(userInput);
+      const previousMessages = conversations.get(userId) || [];
+
+      const messages = [
+        systemMessage,
+        { role: "system", content: `Relevant info from docs:\n${context}` },
+        ...previousMessages,
+        { role: "user", content: userInput }
+      ];
+
       const completion = await openai.chat.completions.create({
         model: "gpt-4",
         messages,
       });
 
       const reply = completion.choices[0].message.content;
-      conversations.set(userId, [...previousMessages, { role: "user", content: userInput }, { role: "assistant", content: reply }]);
 
-      await interaction.deleteReply();
-      await interaction.channel.send({ content: reply });
+      conversations.set(userId, [
+        ...previousMessages,
+        { role: "user", content: userInput },
+        { role: "assistant", content: reply }
+      ]);
+
+      await interaction.editReply(reply);
+
     } catch (err) {
-      console.error("Erro com OpenAI:", err);
-      await interaction.editReply("Something went wrong. Please try again.");
+      console.error("❌ Erro no comando /acolyt:", err);
+
+      if (interaction.deferred) {
+        await interaction.editReply("Something went wrong. Please try again.");
+      } else {
+        await interaction.reply({ ephemeral: true, content: "Something went wrong while processing your request." });
+      }
     }
   }
 });
@@ -189,7 +199,6 @@ setInterval(() => {
     if (err) return console.error("❌ Erro ao gerar embeddings:", err);
     console.log("🧠 Embeddings atualizados automaticamente.");
   });
-}, 1000 * 60 * 15); // A cada 15 minutos
+}, 1000 * 60 * 15);
 
 client.login(process.env.DISCORD_TOKEN);
-// Força novo deploy e registro de comandos
