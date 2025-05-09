@@ -192,3 +192,4 @@ setInterval(() => {
 }, 1000 * 60 * 15); // A cada 15 minutos
 
 client.login(process.env.DISCORD_TOKEN);
+// Força novo deploy e registro de comandos
