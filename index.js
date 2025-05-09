@@ -15,49 +15,51 @@ const client = new Client({
   ],
 });
 
+let knowledgeBase = [];
+
+try {
+  const raw = fs.readFileSync(path.join(__dirname, "signal-embeds.json"), "utf8");
+  knowledgeBase = JSON.parse(raw);
+} catch (err) {
+  console.error("❌ Erro ao carregar signal-embeds.json:", err);
+}
+
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const knowledgeBase = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "signal-embeds.json"), "utf8")
-);
-
 async function getRelevantContext(query) {
-  const embeddingResponse = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: query,
-  });
+  if (!knowledgeBase.length) return "No training data available yet.";
 
-  const queryEmbedding = embeddingResponse.data[0].embedding;
+  try {
+    const embeddingResponse = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: query,
+    });
 
-  const scored = knowledgeBase.map(item => ({
-    content: item.content,
-    score: cosineSimilarity(queryEmbedding, item.embedding),
-  }));
+    const queryEmbedding = embeddingResponse.data[0].embedding;
 
-  scored.sort((a, b) => b.score - a.score);
-  const topMatches = scored.slice(0, 2).map(match => match.content);
-  return topMatches.join("\n\n");
+    const scored = knowledgeBase.map(item => ({
+      content: item.content,
+      score: cosineSimilarity(queryEmbedding, item.embedding),
+    }));
+
+    scored.sort((a, b) => b.score - a.score);
+    const topMatches = scored.slice(0, 2).map(match => match.content);
+    return topMatches.join("\n\n");
+  } catch (err) {
+    console.error("❌ Erro ao gerar embeddings:", err);
+    return "Context unavailable due to embedding error.";
+  }
 }
 
 const conversations = new Map();
 const TRAINING_CHANNEL_ID = "1370404171697623120";
+const BOT_ID = "1368974172994273351";
 
 const systemMessage = {
   role: "system",
   content: `You are Acolyt — a strategic AI built by Signal to serve as a sharp, actionable voice in AI, growth marketing, and Web3. You don’t follow trends. You break them down and reframe them with data, structure, and insight. Your tone is confident, pragmatic, and occasionally provocative. You speak like someone who’s done the work.
 
-You are not here to flatter or theorize. You’re here to ship results, challenge assumptions, and empower others to build with precision. You speak like a mentor who’s part strategist, part builder, and part rebel. You use clarity over jargon, and speak in frameworks, examples, and one-liners when needed.
-
-You have full context on the Signal ecosystem:
-- Signal creates AI Agents to replace traditional marketers and content creators with automation that scales across Twitter/X and Discord.
-- The $ACOLYT token powers staking, tiers, and ranking benefits inside the ecosystem.
-- Users can access dashboards, tools, and ranking systems via usesignal.ai.
-- Staking $ACOLYT unlocks features, ranks, and long-term value participation.
-- You are one of those agents — the one focused on social presence, activation and tactical execution.
-
-You speak to founders, creators, and curious marketers who want an edge. Give them frameworks, insights, and permission to build boldly.
-
-Never default to generalities. Always back ideas with clarity, and when possible, show data or real-world application. If a user asks a vague question, clarify it. If it’s weak, elevate it.`
+You reply concisely. Focus on delivering short, punchy, and insightful responses.`
 };
 
 client.once("ready", async () => {
@@ -96,11 +98,10 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "training-status") {
     const notes = fs.readFileSync(path.join(__dirname, "knowledge", "training-notes.md"), "utf8");
     const blocks = notes.split(/\n{2,}/).filter(Boolean);
-    const vectorCount = JSON.parse(fs.readFileSync(path.join(__dirname, "signal-embeds.json"), "utf8")).length;
+    const vectorCount = knowledgeBase.length;
     const preview = blocks.slice(-3).map(b => `• ${b.split("\n")[1]?.slice(0, 80) || "(empty)"}...`).join("\n");
 
     await interaction.reply({
-      ephemeral: true,
       content: `🧠 **Training Status**\n\nTotal entries: ${vectorCount}\nLast update: ${new Date().toLocaleString()}\n\nLatest notes:\n${preview}`
     });
     return;
@@ -111,7 +112,7 @@ client.on("interactionCreate", async (interaction) => {
     const userId = interaction.user.id;
 
     try {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply();
       await interaction.channel.sendTyping();
 
       const context = await getRelevantContext(userInput);
@@ -145,7 +146,7 @@ client.on("interactionCreate", async (interaction) => {
       if (interaction.deferred) {
         await interaction.editReply("Something went wrong. Please try again.");
       } else {
-        await interaction.reply({ ephemeral: true, content: "Something went wrong while processing your request." });
+        await interaction.reply({ content: "Something went wrong while processing your request." });
       }
     }
   }
@@ -154,36 +155,35 @@ client.on("interactionCreate", async (interaction) => {
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  if (message.reference && message.reference.messageId) {
+  const isReplyToBot = message.reference && message.reference.messageId && (await message.channel.messages.fetch(message.reference.messageId)).author.id === client.user.id;
+  const isMention = message.mentions.has(BOT_ID);
+
+  if (isReplyToBot || isMention) {
     try {
-      const referencedMessage = await message.channel.messages.fetch(message.reference.messageId);
-      if (referencedMessage.author.bot) {
-        await message.channel.sendTyping();
+      await message.channel.sendTyping();
+      const userId = message.author.id;
+      const userInput = message.cleanContent.replace(`<@${BOT_ID}>`, "").trim();
+      const context = await getRelevantContext(userInput);
+      const previousMessages = conversations.get(userId) || [];
 
-        const userId = message.author.id;
-        const userInput = message.content;
-        const context = await getRelevantContext(userInput);
-        const previousMessages = conversations.get(userId) || [];
+      const messages = [
+        systemMessage,
+        { role: "system", content: `Relevant info from docs:\n${context}` },
+        ...previousMessages,
+        { role: "user", content: userInput }
+      ];
 
-        const messages = [
-          systemMessage,
-          { role: "system", content: `Relevant info from docs:\n${context}` },
-          ...previousMessages,
-          { role: "user", content: userInput }
-        ];
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages,
+      });
 
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4",
-          messages,
-        });
+      const reply = completion.choices[0].message.content;
+      await message.reply(reply);
 
-        const reply = completion.choices[0].message.content;
-        await message.reply(reply);
-
-        conversations.set(userId, [...previousMessages, { role: "user", content: userInput }, { role: "assistant", content: reply }]);
-      }
+      conversations.set(userId, [...previousMessages, { role: "user", content: userInput }, { role: "assistant", content: reply }]);
     } catch (err) {
-      console.error("Erro no reply:", err);
+      console.error("Erro no reply ou mention:", err);
     }
   }
 
