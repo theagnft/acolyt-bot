@@ -1,0 +1,20 @@
+{
+  "name": "acolyt-discord-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@discordjs/rest": "^2.5.0",
+    "compute-cosine-similarity": "^1.1.0",
+    "discord-api-types": "^0.38.3",
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.5.0",
+    "openai": "^4.97.0"
+  }
+}
